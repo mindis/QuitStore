@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 import sys
-import os
+from os.path import abspath, relpath, dirname, realpath, join
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..')))
+sys.path.insert(0, abspath(join(dirname(realpath(__file__)), '..')))
 
 import argparse
 from quit.core import FileReference, MemoryStore, GitRepo
@@ -61,8 +61,10 @@ def __savefiles():
 
 def __updategit():
     """Private method to add all updated tracked files."""
-    gitrepo.addall()
-    gitrepo.commit()
+    if gitrepo.isBare() is False:
+        gitrepo.addall()
+        gitrepo.commit()
+
     if config.isgarbagecollectionon():
         gitrepo.garbagecollection()
 
@@ -150,10 +152,19 @@ def applyupdates(actions):
                 # TODO If default graphs are handled, the updates must be handled here
 
     # save all files
-    for filename in savefiles.keys():
-        fo = references[filename]
-        fo.sortcontent()
-        fo.savefile()
+    if gitrepo.isBare():
+        blobDict = {}
+        for filename in savefiles.keys():
+            fo = references[filename]
+            fo.sortcontent()
+            blobDict[relpath(fo.getpath(), gitrepo.getpath())] = fo
+        print('Blob-Dict', blobDict)
+        gitrepo.addblobs(blobDict)
+    else:
+        for filename in savefiles.keys():
+            fo = references[filename]
+            fo.sortcontent()
+            fo.savefile()
 
     return
 
@@ -177,6 +188,7 @@ def initialize(args):
 
     """
     gc = False
+    im = False
 
     if args.disableversioning:
         logger.info('Versioning is disabled')
@@ -202,32 +214,31 @@ def initialize(args):
                 logger.debug(e)
 
     config = QuitConfiguration(versioning=v, gc=gc)
+    store = MemoryStore()
+    gitrepo = GitRepo(config.getrepopath(), config.getpathspec())
 
     logger.debug('Known graphs: ' + str(config.getgraphs()))
     logger.debug('Known files: ' + str(config.getfiles()))
     logger.debug('Path of Gitrepo: ' + str(config.getrepopath()))
     logger.debug('RDF files found in Gitepo:' + str(config.getgraphsfromdir()))
 
-    store = MemoryStore()
-
     files = config.getfiles()
-
-    if args.pathspec:
-        gitrepo = GitRepo(config.getrepopath(), config.getpathspec())
-    else:
-        gitrepo = GitRepo(config.getrepopath())
-
     # Load data to store
-    for filename in files:
-        graphs = config.getgraphuriforfile(filename)
-        graphstring = ''
-        for graph in graphs:
-            graphstring+= str(graph)
-        try:
-            store.addfile(filename, config.getserializationoffile(filename))
-            logger.debug('Success: Graph with URI: ' + graphstring + ' added to my known graphs list')
-        except:
-            pass
+    if gitrepo.isBare:
+        for filename in files:
+            rel_filepath = relpath(filename, gitrepo.getpath())
+            content = gitrepo.getBlobContent(rel_filepath)
+            try:
+                store.addData(content, config.getserializationoffile(filename))
+            except:
+                pass
+    else:
+        for filename in files:
+            try:
+                store.addfile(filename, config.getserializationoffile(filename))
+                logger.debug('Success: Graph with URI: ' + graphstring + ' added to my known graphs list')
+            except:
+                pass
 
     # Save file objects per file
     filereferences = {}
@@ -242,6 +253,8 @@ def initialize(args):
         fileobject.setcontent(sorted(content))
         filereferences[file] = fileobject
 
+    # gitrepo.addremote('test', '/tmp/QuitRemotes/test', True)
+
     return {'store': store, 'config': config, 'gitrepo': gitrepo, 'references': filereferences}
 
 
@@ -254,7 +267,6 @@ def checkrequest(request):
         data: A list with RDFLib.quads object and the rdflib.ConjunciveGraph object
     Raises:
         Exception: I contained data is not valid nquads.
-
     """
     data = []
     reqdata = request.data
@@ -281,7 +293,6 @@ def processsparql(querystring):
         None if valid update query.
     Raises:
         Exception: If query is not a valid SPARQL update or select query
-
     """
     try:
         query = QueryAnalyzer(querystring)
@@ -456,7 +467,7 @@ def checkoutVersion(commitid):
     elif request.method == 'POST':
         if 'commitid' in request.form:
             commitid = request.form['commitid']
-    if commitid == None:
+    if commitid is None:
         msg = 'Commit id is missing in request'
         logger.debug(msg)
         return msg, status.HTTP_400_BAD_REQUEST
@@ -605,6 +616,7 @@ if __name__ == '__main__':
     parser.add_argument('-nv', '--disableversioning', action='store_true')
     parser.add_argument('-gc', '--garbagecollection', action='store_true')
     parser.add_argument('-ps', '--pathspec', action='store_true')
+    # parser.add_argument('-im', '--inmemory', action='store_true')
     args = parser.parse_args()
 
     objects = initialize(args)

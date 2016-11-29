@@ -2,7 +2,7 @@
 
 import unittest
 from context import quit
-from quit.core import MemoryStore, GitRepo
+from quit.core import MemoryStore, GitRepo, FileReference
 from os import path
 from pygit2 import init_repository, Repository, clone_repository
 from pygit2 import GIT_SORT_TOPOLOGICAL, GIT_SORT_REVERSE, Signature
@@ -441,14 +441,15 @@ class GitRepoTests(unittest.TestCase):
 
     def testPushToRemoteWhenAhead(self):
         self.getrepowithcommit()
-        repo = GitRepo(self.dir.name)
+
+        baredir = TemporaryDirectory()
 
         clone_repository(url=self.dir.name, path=self.remotedir.name, bare=True)
-
-        repo = GitRepo(self.dir.name)
+        clone_repository(url=self.dir.name, path=baredir.name, bare=True)
+        repo = GitRepo(baredir.name)
 
         # Test before file gets changed
-        testlocal = Repository(self.dir.name)
+        testlocal = Repository(baredir.name)
         testremote = Repository(self.remotedir.name)
 
         localids = []
@@ -463,12 +464,11 @@ class GitRepoTests(unittest.TestCase):
         self.assertEqual(len(localids), 1)
         self.assertEqual(remoteids, localids)
 
-        # Write file and create commit
+        # Create blob and create commit
         repo.addremote('test', self.remotedir.name)
-        self.file.write(b'Add a second line to file\n')
-        self.file.read()
-        repo.addall()
-        repo.commit()
+        fr = FileReference(self.filename)
+        fr.setcontent('Add a second line to file\n')
+        repo.addblobs({self.filename: fr})
 
         # Test after file got changed and commit was created
         repo.setpushurl('test', self.dir.name)
@@ -485,6 +485,8 @@ class GitRepoTests(unittest.TestCase):
 
         self.assertEqual(len(localids), 2)
         self.assertEqual(localids, remoteids)
+
+        baredir.cleanup()
 
     def testPushToRemoteWhenDiverged(self):
         self.getrepowithcommit()

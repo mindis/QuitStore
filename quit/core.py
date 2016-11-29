@@ -7,8 +7,11 @@ from quit.update import evalUpdate
 from pygit2 import GIT_MERGE_ANALYSIS_UP_TO_DATE
 from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD
 from pygit2 import GIT_MERGE_ANALYSIS_NORMAL
+from pygit2 import GIT_FILEMODE_BLOB
+from pygit2 import GIT_FILEMODE_BLOB_EXECUTABLE
 from pygit2 import GIT_SORT_REVERSE, GIT_RESET_HARD, GIT_STATUS_CURRENT, init_repository
-from pygit2 import Repository, Signature
+from pygit2 import GIT_OBJ_BLOB
+from pygit2 import Repository, Signature, clone_repository
 from os.path import isdir, join
 from subprocess import Popen
 from rdflib import ConjunctiveGraph, Graph, URIRef, BNode
@@ -89,6 +92,18 @@ class FileReference:
             content: A list of strings where each string is a quad.
         """
         return self.__getcontent()
+
+    def getcontentstring(self):
+        """Public method that returns the content of a nquad file.
+
+        Returns:
+            content: The file content as a string.
+        """
+        return '\n'.join(self.__getcontent())
+
+    def getpath(self):
+        """Public method that returns the path of the file."""
+        return self.path
 
     def setcontent(self, content):
         """Public method to set the content of a n-quad file.
@@ -246,6 +261,21 @@ class MemoryStore:
         else:
             return True
 
+    def addData(self, content, serialization):
+        """Add a list of quads to the store.
+
+        Args:
+            content: A list of quads.
+        """
+        try:
+            self.store.parse(data=content, format=serialization)
+        except:
+            self.logger.debug('Could not import data.')
+            self.logger.debug('Make sure the file exists and contains data in', serialization)
+            pass
+
+        return
+
     def addfile(self, filename, serialization):
         """Add a file to the store.
 
@@ -344,19 +374,49 @@ class GitRepo:
         self.path = path
 
         try:
-            if isdir(join(path, '.git')):
-                repo = Repository(path)
+            repo = Repository(self.path)
+
+            if repo.is_bare:
+                self.bare = True
             else:
-                repo = init_repository(path, False)
+                self.bare = False
+
             self.repo = repo
         except:
+            # Path is not a git repo
             raise
 
     def addall(self):
         """Add all (newly created|changed) files to index."""
-        self.repo.index.read()
-        self.repo.index.add_all(self.pathspec)
-        self.repo.index.write()
+        if not self.bare:
+            self.repo.index.read()
+            self.repo.index.add_all(self.pathspec)
+            self.repo.index.write()
+
+    def addblobs(self, fileRefs={}, filemode=GIT_FILEMODE_BLOB):
+        """Create a new blob in index."""
+        # indextreeid = self.repo.index.write_tree()
+        head = self.repo.head
+        # tree = self.repo[indextreeid]
+        head = self.repo[head.target]
+        bld = self.repo.TreeBuilder(head.tree)
+
+        for path, fileRef in fileRefs.items():
+            try:
+                entry = head.tree[path]
+                filemode = entry.filemode
+            except:
+                pass
+
+            bloboid = self.repo.write(GIT_OBJ_BLOB, fileRef.getcontentstring())
+            bld.insert(path, bloboid, filemode)
+
+        treeoid = bld.write()
+
+        # for entry in self.repo.get(treeoid):
+        #     print(entry.id, entry.type, entry.name)
+
+        self.commit(tree=treeoid)
 
     def addfile(self, filename):
         """Add a file to the index.
@@ -381,6 +441,12 @@ class GitRepo:
             url: A string containing the url to the remote.
         """
         try:
+            self.repo.remotes[name]
+            return
+        except:
+            self.logger.debug('GitRepo, addremote, Remote already exists.')
+
+        try:
             self.repo.remotes.create(name, url)
             self.logger.debug('GitRepo, addremote, Successful added remote', name, url)
         except:
@@ -400,7 +466,7 @@ class GitRepo:
         except:
             self.logger.debug('GitRepo, checkout, Commit-ID (' + commitid + ') does not exist')
 
-    def commit(self, message=None):
+    def commit(self, message=None, tree=None):
         """Commit staged files.
 
         Args:
@@ -408,15 +474,16 @@ class GitRepo:
         Raises:
             Exception: If no files in staging area.
         """
-        if self.isstagingareaclean():
-            # nothing to commit
-            return
+        if self.bare is False:
+            if self.isstagingareaclean():
+                # nothing to commit
+                return
 
         # tree = self.repo.TreeBuilder().write()
-
-        index = self.repo.index
-        index.read()
-        tree = index.write_tree()
+        if tree is None:
+            index = self.repo.index
+            index.read()
+            tree = index.write_tree()
 
         try:
             author = Signature(self.author_name, self.author_email)
@@ -474,6 +541,32 @@ class GitRepo:
             self.logger.debug('Git garbage collection failed to spawn')
         return
 
+    def getBlobContent(self, path):
+        """Return the raw content of a blob.
+
+        Args:
+            path: A string containg the absolute path (from root of repository) of a blob
+        Returns:
+            A string with the raw content of the blob.
+        """
+        head = self.repo.head
+        head = self.repo[head.target]
+
+        try:
+            entry = head.tree[path]
+            blob = self.repo[entry.id]
+        except:
+            return None
+
+        content = blob.read_raw()
+
+        if isinstance(content, str):
+            pass
+        elif isinstance(content, bytes):
+            content = content.decode('utf-8')
+
+        return content
+
     def getpath(self):
         """Return the path of the git repository.
 
@@ -516,6 +609,15 @@ class GitRepo:
                 ids.append(str(commit.oid))
         return ids
 
+    def isBare(self):
+        """Check if repo is bare or non bare.
+
+        Returns:
+            True, if bare
+            False, if not
+        """
+        return self.bare
+
     def isstagingareaclean(self):
         """Check if staging area is clean.
 
@@ -524,6 +626,12 @@ class GitRepo:
             False, else.
         """
         status = self.repo.status()
+
+        if len(status) == 0 and len(self.getcommits()) > 0:
+            return True
+        elif len(status) == 0 and len(self.getcommits()) == 0:
+            # Initial commit
+            return False
 
         for filepath, flags in status.items():
             if flags != GIT_STATUS_CURRENT:

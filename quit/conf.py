@@ -8,7 +8,11 @@ from os.path import isdir, join, isfile, split, abspath
 class QuitConfiguration:
     """A class that keeps track of the relation between named graphs and files."""
 
-    def __init__(self, gitrepo=None, configfile='config.ttl', gc=False, versioning=True):
+    def __init__(self,
+                 gitrepo=None,
+                 configfile='config.ttl',
+                 gc=False,
+                 versioning=True):
         """The init method.
 
         This method checks if the config file is given and reads the config file.
