@@ -468,7 +468,8 @@ class GitRepoTests(unittest.TestCase):
         repo.addremote('test', self.remotedir.name)
         fr = FileReference(self.filename)
         fr.setcontent('Add a second line to file\n')
-        repo.addblobs({self.filename: fr})
+        treeoid = repo.addblobs({self.filename: fr})
+        repo.commit(tree=treeoid)
 
         # Test after file got changed and commit was created
         repo.setpushurl('test', self.dir.name)

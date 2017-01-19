@@ -158,7 +158,8 @@ def applyupdates(actions):
             fo = references[filename]
             fo.sortcontent()
             blobDict[relpath(fo.getpath(), gitrepo.getpath())] = fo
-        gitrepo.addblobs(blobDict)
+        treeoid = gitrepo.addblobs(blobDict)
+        gitrepo.commit(tree=treeoid)
     else:
         for filename in savefiles.keys():
             fo = references[filename]

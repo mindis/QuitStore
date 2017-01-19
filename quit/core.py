@@ -413,10 +413,7 @@ class GitRepo:
 
         treeoid = bld.write()
 
-        # for entry in self.repo.get(treeoid):
-        #     print(entry.id, entry.type, entry.name)
-
-        self.commit(tree=treeoid)
+        return treeoid
 
     def addfile(self, filename):
         """Add a file to the index.
@@ -458,6 +455,9 @@ class GitRepo:
         Args:
             commitid: A string cotaining a commitid.
         """
+        if self.bare:
+            return
+
         try:
             commit = self.repo.revparse_single(commitid)
             self.repo.set_head(commit.oid)
@@ -480,10 +480,13 @@ class GitRepo:
                 return
 
         # tree = self.repo.TreeBuilder().write()
-        if tree is None:
+        if tree is None and self.bare is False:
             index = self.repo.index
             index.read()
             tree = index.write_tree()
+        elif tree is None and self.bare is True:
+            self.logger.debug('GitRepo, commit, A tree is needed to commit in bare repo.')
+            return
 
         try:
             author = Signature(self.author_name, self.author_email)
