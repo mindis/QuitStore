@@ -99,7 +99,7 @@ class FileReference:
         Returns:
             content: The file content as a string.
         """
-        return '\n'.join(self.__getcontent())
+        return '\n'.join(self.__getcontent()) + '\n'
 
     def getpath(self):
         """Public method that returns the path of the file."""
