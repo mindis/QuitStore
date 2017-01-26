@@ -18,7 +18,9 @@ from flask.ext.api import FlaskAPI, status
 from flask.ext.api.decorators import set_parsers
 from flask.ext.api.exceptions import NotAcceptable
 from flask.ext.cors import CORS
+from quit_diff.serializer import SparqlDiff, ChangesetDiff, TopbraidDiff, EccrevDiff
 from rdflib import ConjunctiveGraph, Graph, Literal
+from importlib import import_module
 import json
 import subprocess
 
@@ -157,6 +159,46 @@ def applyupdates(actions):
 
     return
 
+def buildPatch(actions, patch='Sparql'):
+    if patch not in ['Sparql', 'Topbraid', 'Changeset', 'Eccrev']:
+        logger.debug('Unknown patch format', patch)
+        return
+
+    graphsandfiles = config.getgraphurifilemap()
+    add = {}
+    delete = {}
+    insertgraphs = []
+    deletegraphs = []
+    for entry in actions:
+        for action, quad in entry.items():
+            if quad[1] != 'default':
+                g = quad[1]
+                if str(g) in graphsandfiles.keys():
+                    s = quad[0][0]
+                    p = quad[0][1]
+                    o = quad[0][2]
+                else:
+                    continue
+                if action == 'insert':
+                    if g not in insertgraphs:
+                        insertgraphs.append(g)
+                        add[g] = Graph()
+                    graph = add[g]
+                    graph.add((s, p, o))
+                if action == 'delete':
+                    if g not in deletegraphs:
+                        deletegraphs.append(g)
+                        delete[g] = Graph()
+                    graph = delete[g]
+                    graph.add((s, p, o))
+
+    module = patch + 'Diff'
+    diff = getattr(import_module('quit_diff.serializer.' + module), module)
+    diffSerializer = diff()
+    result = diffSerializer.serialize(add, delete)
+
+    return result
+
 
 def multilineliteralhack(quad):
     """Handle multi lined literals with N-Quads."""
@@ -271,7 +313,7 @@ def checkrequest(request):
     return data
 
 
-def processsparql(querystring):
+def processsparql(querystring, patchformat=None):
     """Execute a sparql query after analyzing the query string.
 
     Args:
@@ -291,19 +333,22 @@ def processsparql(querystring):
     except:
         raise
 
-    if query.getType() == 'SELECT':
+    result = ''
+    queryType = query.getType()
+
+    if queryType == 'SELECT':
         logger.debug('Execute select query')
         result = store.query(query.getParsedQuery())
-    elif query.getType() == 'DESCRIBE':
+    elif queryType == 'DESCRIBE':
         logger.debug('Skip describe query')
         result = None
-    elif query.getType() == 'CONSTRUCT':
+    elif queryType == 'CONSTRUCT':
         logger.debug('Execute construct query')
         result = store.query(query.getParsedQuery())
-    elif query.getType() == 'ASK':
+    elif queryType == 'ASK':
         logger.debug('Execute ask query')
         result = store.query(query.getParsedQuery())
-    elif query.getType() == 'UPDATE':
+    elif queryType == 'UPDATE':
         if query.getParsedQuery() is None:
             query = querystring
         else:
@@ -313,14 +358,16 @@ def processsparql(querystring):
         if config.isversioningon():
             actions = store.update(query)
             if len(actions) > 0:
-                applyupdates(actions)
-                __updategit()
-            return
+                # applyupdates(actions)
+                # __updategit()
+                if patchformat is not None:
+                    result = buildPatch(actions, patchformat)
         else:
             store.update(query, versioning=False)
-            return
 
-    return result
+    if queryType != 'UPDATE':
+        queryType = 'DISCOVER'
+    return {queryType: result}
 
 
 def addtriples(values):
@@ -403,6 +450,7 @@ def sparql():
         HTTP Response 200: If request contained a valid update query.
         HTTP Response 400: If request doesn't contain a valid sparql query.
     """
+    patch = ''
     try:
         # TODO: also handle 'default-graph-uri'
         if request.method == 'GET':
@@ -421,10 +469,21 @@ def sparql():
     except:
         logger.debug('Query is missing in request')
         return '', status.HTTP_400_BAD_REQUEST
+    try:
+        if request.method == 'GET':
+            if 'patchformat' in request.args:
+                patch = request.args['patchformat']
+        elif request.method == 'POST':
+            if 'patchformat' in request.form:
+                patch = request.form['patchformat']
+    except:
+        pass
 
     try:
-        result = processsparql(query)
-        pass
+        if patch is not '':
+            result = processsparql(query, patchformat=patch)
+        else:
+            result = processsparql(query)
     except Exception as e:
         logger.debug('Something is wrong with received query:', e)
         import traceback
@@ -432,11 +491,11 @@ def sparql():
         return '', status.HTTP_400_BAD_REQUEST
 
     # Check weather we have a result (SELECT) or not (UPDATE) and respond correspondingly
-    if result is not None:
-        return sparqlresponse(result, resultFormat())
+    if 'DISCOVER' in result:
+        return sparqlresponse(result['DISCOVER'], resultFormat())
     else:
         # resultformat = resultFormat()
-        return Response("",
+        return Response(result['UPDATE'],
                         content_type=resultFormat()['mime']
                         )
         # return '', status.HTTP_200_OK
@@ -605,6 +664,7 @@ if __name__ == '__main__':
     parser.add_argument('-nv', '--disableversioning', action='store_true')
     parser.add_argument('-gc', '--garbagecollection', action='store_true')
     parser.add_argument('-ps', '--pathspec', action='store_true')
+
     args = parser.parse_args()
 
     objects = initialize(args)
