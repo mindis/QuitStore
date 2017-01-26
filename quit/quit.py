@@ -190,6 +190,10 @@ def initialize(args):
 
     """
     gc = False
+    bn = False
+
+    if args.blanknode:
+        bn = True
 
     if args.disableversioning:
         logger.info('Versioning is disabled')
@@ -214,7 +218,7 @@ def initialize(args):
                 logger.info('Git garbage collection could not be configured and was disabled')
                 logger.debug(e)
 
-    config = QuitConfiguration(versioning=v, gc=gc)
+    config = QuitConfiguration(versioning=v, gc=gc, bnSupport=bn)
 
     logger.debug('Known graphs: ' + str(config.getgraphs()))
     logger.debug('Known files: ' + str(config.getfiles()))
@@ -245,10 +249,8 @@ def initialize(args):
     # Save file objects per file
     filereferences = {}
 
-    store.setAtomicGraphs()
-    aGraphs = store.getAtomicGraphs()
-    for graph in aGraphs:
-        print(graph)
+    if config.isblanknodesupporton:
+        store.setAtomicGraphs()
 
     for file in config.getfiles():
         graphs = config.getgraphuriforfile(file)
@@ -623,6 +625,7 @@ if __name__ == '__main__':
     parser.add_argument('-nv', '--disableversioning', action='store_true')
     parser.add_argument('-gc', '--garbagecollection', action='store_true')
     parser.add_argument('-ps', '--pathspec', action='store_true')
+    parser.add_argument('-bn', '--blanknode', action='store_true')
     args = parser.parse_args()
 
     objects = initialize(args)
