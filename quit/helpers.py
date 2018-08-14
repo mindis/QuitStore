@@ -267,6 +267,10 @@ def parse_sparql_request(request):
         quintuple - query, type, mimetype, default_graph, named_graph
     """
     query = None
+    type = None
+    default_graph = []
+    named_graph = []
+
     if request.method == "GET":
         default_graph = request.args.getlist('default-graph-uri')
         named_graph = request.args.getlist('named-graph-uri')
